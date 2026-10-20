@@ -1,0 +1,6 @@
+{
+  "name": "RadVision AI - Clinical Radiology & Biomedical Vision Assistant",
+  "description": "Expert AI clinical research assistant and biomedical vision analysis workstation for structured radiological observation, anomaly detection, teaching simulation, and synthetic clinical imaging.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

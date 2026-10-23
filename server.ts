@@ -18,11 +18,20 @@ const port = process.env.PORT || 3000;
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+const ALLOWED_ANALYSIS_MODELS = new Set(['gemini-3.8-flash', 'gemini-2.5-flash']);
+const ALLOWED_IMAGE_GENERATION_MODELS = new Set(['gemini-3.1-flash-lite-image', 'gemini-2.5-flash-image']);
+const ALLOWED_TTS_MODELS = new Set(['gemini-3.8-flash-lite-tts', 'gemini-2.5-flash-preview-tts']);
+const ALLOWED_ASPECT_RATIOS = new Set(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']);
+const ALLOWED_IMAGE_SIZES = new Set(['1K', '2K', '4K']);
+const ALLOWED_TTS_VOICES = new Set(['Kore', 'Puck', 'Charon', 'Fenrir', 'Aoede']);
+
 // Server-side initialization of Gemini client
 const getGeminiClient = () => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not configured in environment variables');
+    const err: any = new Error('GEMINI_API_KEY is not configured in environment variables');
+    err.statusCode = 503;
+    throw err;
   }
   return new GoogleGenAI({
     apiKey,
@@ -50,61 +59,66 @@ app.post('/api/analyze-image', async (req, res) => {
       return res.status(400).json({ error: 'Missing imageBase64 in request body' });
     }
 
+    const selectedModel = typeof model === 'string' && ALLOWED_ANALYSIS_MODELS.has(model) ? model : 'gemini-3.8-flash';
+
     // Clean data URL prefix if present
     const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
 
     const ai = getGeminiClient();
 
-    const systemInstruction = `You are an expert AI clinical research assistant specialized in biomedical vision analysis and radiology assistance. Your role is to evaluate uploaded medical imaging scans (e.g., Chest X-rays, CTs, MRIs, Ultrasounds, Histopathology, Dermatology photos) and generate structured, professional observational reports.
+    const systemInstruction = `You are RadVision AI, an expert clinical research assistant and biomedical vision workstation. You must adhere strictly to the following operational, safety, and formatting constraints.
 
 ### CORE OBJECTIVE
-Analyze visual inputs systematically, report objective radiological and clinical findings, highlight potential anomalies, and structure your output into standardized clinical reporting sections.
+Analyze uploaded medical imaging scans (e.g., Chest X-rays, CTs, MRIs, Ultrasounds, Histopathology, Dermatology photos) and generate structured, professional observational reports for research and educational purposes only.
 
----
+### 1. INPUT VALIDATION & HALLUCINATION GUARDRAILS
+- Evaluate input image quality first. If the image is non-medical, severely cropped, corrupted, or inadequate for diagnosis, output a structured refusal in your assessment: set isMedicalImage=false and qualityAcceptable=false. Do NOT fabricate, guess, or assume abnormal findings on clear normal images or invalid inputs.
+- Restrict output strictly to the provided JSON schema.
 
-### MANDATORY OUTPUT FORMAT
-Every response MUST strictly adhere to the following section structure:
+### 2. HEDGED CLINICAL PHRASING
+- Always use probabilistic clinical phrasing (e.g., "findings are suggestive of", "features are consistent with", "findings raise suspicion for").
+- NEVER state unhedged absolute diagnoses (e.g., write "features are consistent with left lower lobe pneumonia", NOT "the patient has pneumonia").
 
-### 1. Technical & Modality Assessment
-- **Modality & Projection:** [e.g., Posteroanterior Chest X-Ray, Axial T2-Weighted Brain MRI, Gross Pathology, Dermoscopy]
-- **Image Quality & Limitations:** [Assess exposure, resolution, framing, movement artifacts, or contrast constraints]
+### 3. MANDATORY 6-SECTION REPORT STRUCTURE
+Format all clinical evaluations strictly into these 6 sections:
+1. Technical & Modality Assessment
+2. Systematic Anatomical Findings
+3. Key Observations & Highlighted Anomalies
+4. Impression & Differential Considerations (1-3 prioritized)
+5. Recommended Clinical Follow-up
+6. Mandatory Safety Disclaimer
 
-### 2. Systematic Anatomical Findings
-- **Primary Structures:** [Itemized evaluation of key anatomical regions, e.g., lung fields, cardiac silhouette, mediastinum, pleural space]
-- **Secondary & Osseous Features:** [Assessment of bones, soft tissues, or foreign objects/medical devices like tubes or pacemakers]
+### 4. EHR / FHIR PAYLOAD GENERATION AWARENESS
+- When findings are structured, they must be representable as a valid HL7 FHIR R4 DiagnosticReport and Observation resources with appropriate coding concepts (LOINC/SNOMED CT) where applicable.
 
-### 3. Key Observations & Highlighted Anomalies
-- **Feature 1:** [Location, size, margin characteristics, and density/attenuation/signal intensity]
-- **Feature 2:** [Additional focal or diffuse findings, or state "No additional focal abnormalities detected"]
-
-### 4. Impression & Differential Considerations
-- **Clinical Synthesis:** [Concise summary of the visual findings]
-- **Differential Patterns:** [1–3 clinical patterns or differential considerations consistent with the observed features, framed for educational/research evaluation]
-
-### 5. Recommended Clinical Follow-up
-- **Suggested Next Steps:** [e.g., Comparison with prior imaging, dedicated lateral view, targeted CT/lab correlation]
-
-### 6. Mandatory Safety Disclaimer
-> ⚠️ **RESEARCH & DEMONSTRATION DISCLAIMER:** This visual assessment is automatically generated by an experimental AI system for research, testing, and educational purposes only. It is NOT a clinical diagnosis, official radiology report, or replacement for professional medical advice. All visual findings must be independently reviewed and confirmed by a board-certified radiologist or licensed healthcare professional.
-
----
+### 5. AGENTIC WORKFLOWS & HUMAN-IN-THE-LOOP (HITL)
+- All proposed actions (order drafting, follow-up recommendations, patient summaries) are DRAFTS.
+- Explicitly flag every actionable recommendation with: [REQUIRES CLINICIAN REVIEW AND SIGN-OFF].
 
 ### OPERATIONAL CONSTRAINTS
-1. **Hedged Language:** Never declare a definitive diagnosis (e.g., do NOT state "The patient has a right lower lobe pneumonia"). Instead, use probabilistic clinical phrasing such as "Findings are suggestive of...", "Features are consistent with...", or "Demonstrates a visual pattern associated with...".
+1. **Hedged Language:** Never declare a definitive diagnosis. Use probabilistic phrasing.
 2. **Quality Failure Handling:** If an uploaded image is non-medical, severely degraded, cropped, or unreadable, state this clearly in Section 1 and refuse to speculate on abnormal findings. Indicate in Section 4 that visual data is insufficient for clinical evaluation.
 3. **Objective Medical Vocabulary:** Use precise clinical terminology (e.g., *radiolucent*, *hyperdense*, *ground-glass opacity*, *pleural effusion*, *atelectasis*, *consolidation*, *circumscribed*, *spiculated*, *signal attenuation*) rather than non-clinical terms.
-4. **Privacy and Security:** All patient data must remain strictly confidential and encrypted. Avoid disclosing or inferring identifying patient details.`;
+4. **Privacy and Security:** Avoid disclosing or inferring identifying patient details.
+5. **Deterministic Disclaimer:** The Mandatory Safety Disclaimer in section6_mandatorySafetyDisclaimer MUST be the exact research and demonstration disclaimer provided.`;
 
     const userPrompt = `Systematic Clinical Analysis Request:
 Modality/Exam hint: ${modalityHint || 'Auto-detect from image'}
 Patient Clinical Context/Reason for Exam: ${clinicalContext || 'Routine diagnostic/educational evaluation'}
 ${roi ? `User Designated Region of Interest (ROI Normalized Box): [ymin: ${roi.ymin}, xmin: ${roi.xmin}, ymax: ${roi.ymax}, xmax: ${roi.xmax}] - Please pay special attention to this region.` : ''}
 
-Please analyze this biomedical visual scan adhering strictly to the 6 mandatory sections and all operational constraints. Provide both a rich structured assessment and exact section headers.`;
+MANDATORY REQUIREMENTS:
+- If non-medical/unreadable -> isMedicalImage=false, qualityAcceptable=false. Do NOT list differential diagnoses. In section4_impressionDifferential.clinicalSynthesis state visual data is insufficient. In section5_clinicalFollowUp.suggestedNextSteps include ONLY guidance that no clinical conclusions can be drawn [REQUIRES CLINICIAN REVIEW AND SIGN-OFF].
+- For medical images, use strictly hedged phrasing (suggestive of/consistent with/raises suspicion for). NEVER use absolute diagnoses.
+- Flag EVERY actionable recommendation in section5_clinicalFollowUp with [REQUIRES CLINICIAN REVIEW AND SIGN-OFF].
+- section6_mandatorySafetyDisclaimer MUST be EXACTLY: "⚠️ RESEARCH & DEMONSTRATION DISCLAIMER: This visual assessment is automatically generated by an experimental AI system for research, testing, and educational purposes only. It is NOT a clinical diagnosis, official radiology report, or replacement for professional medical advice. All visual findings must be independently reviewed and confirmed by a board-certified radiologist or licensed healthcare professional."
+- Provide both rich structured assessment and exact section headers in formattedMarkdownReport.
+
+Analyze this biomedical visual scan adhering strictly to the 6 mandatory sections and all operational constraints.`;
 
     // Request structured JSON schema for UI display + formatted markdown report
     const response = await ai.models.generateContent({
-      model: model || 'gemini-3.8-flash',
+      model: selectedModel,
       contents: {
         parts: [
           {
@@ -235,7 +249,7 @@ Please analyze this biomedical visual scan adhering strictly to the 6 mandatory 
             },
             section6_mandatorySafetyDisclaimer: {
               type: Type.STRING,
-              description: 'The exact mandatory research and demonstration disclaimer',
+              description: 'Must be the exact mandatory research and demonstration disclaimer',
             },
             formattedMarkdownReport: {
               type: Type.STRING,
@@ -257,13 +271,22 @@ Please analyze this biomedical visual scan adhering strictly to the 6 mandatory 
       },
     });
 
-    const parsedJson = JSON.parse(response.text || '{}');
+    let parsedJson: any = {};
+    try {
+      parsedJson = JSON.parse(response.text || '{}');
+    } catch (parseErr: any) {
+      console.error('Error parsing model JSON:', parseErr);
+      return res.status(502).json({ error: 'Model returned malformed structured output' });
+    }
     return res.json({ success: true, data: parsedJson });
   } catch (error: any) {
     console.error('Error analyzing image:', error);
-    return res.status(500).json({
-      error: error.message || 'An error occurred during biomedical vision analysis',
-    });
+    const status = error?.statusCode || 500;
+    if (status === 503 || error?.message?.includes('GEMINI_API_KEY')) {
+      return res.status(503).json({ error: 'GEMINI_API_KEY is not configured in environment variables' });
+    }
+    const msg = typeof error?.message === 'string' ? error.message : 'An error occurred during biomedical vision analysis';
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -276,37 +299,42 @@ app.post('/api/generate-reference', async (req, res) => {
       aspectRatio = '1:1',
       imageSize = '1K',
       modalityType = 'X-Ray',
+      model: requestedModel,
     } = req.body;
 
-    if (!prompt) {
+    if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
       return res.status(400).json({ error: 'Prompt is required' });
     }
 
     const ai = getGeminiClient();
 
-    // Map aspect ratios to supported formats
-    const allowedRatios = ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9'];
-    const validRatio = allowedRatios.includes(aspectRatio) ? aspectRatio : '1:1';
+    const validRatio = typeof aspectRatio === 'string' && ALLOWED_ASPECT_RATIOS.has(aspectRatio) ? aspectRatio : '1:1';
+    const validImageSize = typeof imageSize === 'string' && ALLOWED_IMAGE_SIZES.has(imageSize) ? imageSize : '1K';
+    const selectedImageModel =
+      typeof requestedModel === 'string' && ALLOWED_IMAGE_GENERATION_MODELS.has(requestedModel)
+        ? requestedModel
+        : 'gemini-3.1-flash-lite-image';
 
-    // Model selection: nano-banana-2.1 or 3.1-flash-lite-image
-    // For 1K, 2K, 4K resolution control, nano banana 2.1 is specified
-    const fullPrompt = `Medical educational visual atlas reference: High resolution ${modalityType} illustration. ${prompt}. Clear anatomical landmarks, professional biomedical scientific render, realistic radiological contrast and attenuation, labeled or educational clarity, no artifacts.`;
+    // Map aspect ratios to supported formats for flash-lite-image (subset)
+    const supportedByFlashLite = ['1:1', '3:4', '4:3', '9:16', '16:9'];
+    const ratioForConfig = supportedByFlashLite.includes(validRatio) ? validRatio : '1:1';
+
+    const fullPrompt = `Medical educational visual atlas reference: High resolution ${modalityType} illustration. ${prompt.trim()}. Clear anatomical landmarks, professional biomedical scientific render, realistic radiological contrast and attenuation, labeled or educational clarity, no artifacts.`;
 
     let generatedImageUrl = '';
-    let usedModel = 'gemini-3.1-flash-lite-image';
+    let usedModel = selectedImageModel;
 
-    // Attempt generation with flash-lite-image or nano-banana
+    // Attempt generation
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-lite-image',
+        model: selectedImageModel,
         contents: {
           parts: [{ text: fullPrompt }],
         },
         config: {
           imageConfig: {
-            aspectRatio: ['1:1', '3:4', '4:3', '9:16', '16:9'].includes(validRatio)
-              ? (validRatio as any)
-              : '1:1',
+            aspectRatio: ratioForConfig as any,
+            ...(validImageSize ? ({ imageSize: validImageSize } as any) : {}),
           },
         },
       });
@@ -334,30 +362,38 @@ app.post('/api/generate-reference', async (req, res) => {
       success: true,
       imageUrl: generatedImageUrl,
       aspectRatio: validRatio,
-      imageSize,
+      imageSize: validImageSize,
       modelUsed: usedModel,
     });
   } catch (error: any) {
     console.error('Error generating reference image:', error);
-    return res.status(500).json({
-      error: error.message || 'Failed to generate reference image',
-    });
+    const status = error?.statusCode || 500;
+    if (status === 503 || error?.message?.includes('GEMINI_API_KEY')) {
+      return res.status(503).json({ error: 'GEMINI_API_KEY is not configured in environment variables' });
+    }
+    const msg = typeof error?.message === 'string' ? error.message : 'Failed to generate reference image';
+    return res.status(status).json({ error: msg });
   }
 });
 
 // API: Audio Dictation / Speech for Hands-Free Radiology Workflow
 app.post('/api/generate-speech', async (req, res) => {
   try {
-    const { text, voice = 'Kore' } = req.body;
-    if (!text) {
+    const { text, voice = 'Kore', model: requestedModel } = req.body;
+    if (!text || typeof text !== 'string') {
       return res.status(400).json({ error: 'Text is required for speech synthesis' });
     }
+
+    const selectedTtsModel =
+      typeof requestedModel === 'string' && ALLOWED_TTS_MODELS.has(requestedModel) ? requestedModel : 'gemini-3.8-flash-lite-tts';
+    const selectedVoice =
+      typeof voice === 'string' && ALLOWED_TTS_VOICES.has(voice) ? voice : 'Kore';
 
     const ai = getGeminiClient();
     const cleanText = text.slice(0, 1500); // Reasonable clip length
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash-lite-tts',
+      model: selectedTtsModel,
       contents: [
         {
           role: 'user',
@@ -375,7 +411,7 @@ app.post('/api/generate-speech', async (req, res) => {
         responseModalities: ['AUDIO'],
         speechConfig: {
           voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: voice || 'Kore' },
+            prebuiltVoiceConfig: { voiceName: selectedVoice },
           },
         },
       },
@@ -392,9 +428,12 @@ app.post('/api/generate-speech', async (req, res) => {
     });
   } catch (error: any) {
     console.error('TTS error:', error);
-    return res.status(500).json({
-      error: error.message || 'TTS synthesis failed',
-    });
+    const status = error?.statusCode || 500;
+    if (status === 503 || error?.message?.includes('GEMINI_API_KEY')) {
+      return res.status(503).json({ error: 'GEMINI_API_KEY is not configured in environment variables' });
+    }
+    const msg = typeof error?.message === 'string' ? error.message : 'TTS synthesis failed';
+    return res.status(status).json({ error: msg });
   }
 });
 

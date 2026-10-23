@@ -304,10 +304,10 @@ Recommended follow up: ${report.section5_clinicalFollowUp.suggestedNextSteps.joi
             <span>Download ZIP</span>
           </a>
 
-          {/* Security / Confidentiality Shield Badge */}
-          <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-emerald-950/40 text-emerald-300 rounded-lg border border-emerald-800/50 text-xs font-mono">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>CONFIDENTIAL · PHI ENCRYPTED</span>
+          {/* Privacy / Confidentiality Notice */}
+          <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-amber-950/40 text-amber-300 rounded-lg border border-amber-800/50 text-xs font-mono" title="Review and redact PHI before uploading. Images may be sent to the configured Gemini API.">
+            <ShieldCheck className="w-4 h-4 text-amber-400" />
+            <span>PHI: VERIFY BEFORE UPLOAD · REDACT SENSITIVE MARKERS</span>
           </div>
         </div>
       </header>

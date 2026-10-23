@@ -166,8 +166,7 @@ export const MedicalViewer: React.FC<MedicalViewerProps> = ({
       };
       setRoiBox(newBox);
     } else if (isDrawingMask && maskStart) {
-      const { normX, normY } = getNormalizedCoords(e);
-      // Temporary draw is handled visually or updated
+      // Live preview handled visually; coords computed on mouse up
     }
   };
 
@@ -294,7 +293,7 @@ export const MedicalViewer: React.FC<MedicalViewerProps> = ({
   return (
     <div
       ref={containerRef}
-      className={`relative flex flex-col bg-slate-950 border border-slate-800 rounded-xl overflow-hidden select-none ${
+      className={`relative flex flex-col bg-slate-950 border border-slate-800 rounded-xl overflow-hidden select-none touch-none ${
         isFullscreen ? 'fixed inset-0 z-50 rounded-none' : 'h-[620px]'
       }`}
     >
@@ -461,6 +460,60 @@ export const MedicalViewer: React.FC<MedicalViewerProps> = ({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onTouchStart={(e) => {
+          e.preventDefault();
+          const touch = e.touches[0];
+          if (!touch) return;
+          const synthetic = { clientX: touch.clientX, clientY: touch.clientY } as unknown as React.MouseEvent<HTMLDivElement>;
+          if (activeTool === 'pan') {
+            setIsPanning(true);
+            setStartPan({ x: touch.clientX - pan.x, y: touch.clientY - pan.y });
+          } else if (activeTool === 'roi') {
+            const { normX, normY } = getNormalizedCoords(synthetic);
+            setIsDrawingRoi(true);
+            setRoiStart({ x: normX, y: normY });
+          } else if (activeTool === 'phi-mask') {
+            const { normX, normY } = getNormalizedCoords(synthetic);
+            setIsDrawingMask(true);
+            setMaskStart({ x: normX, y: normY });
+          }
+        }}
+        onTouchMove={(e) => {
+          e.preventDefault();
+          const touch = e.touches[0];
+          if (!touch) return;
+          if (isPanning && activeTool === 'pan') {
+            setPan({ x: touch.clientX - startPan.x, y: touch.clientY - startPan.y });
+          } else if (isDrawingRoi && roiStart) {
+            const synthetic = { clientX: touch.clientX, clientY: touch.clientY } as unknown as React.MouseEvent<HTMLDivElement>;
+            const { normX, normY } = getNormalizedCoords(synthetic);
+            setRoiBox({
+              ymin: Math.min(roiStart.y, normY),
+              xmin: Math.min(roiStart.x, normX),
+              ymax: Math.max(roiStart.y, normY),
+              xmax: Math.max(roiStart.x, normX),
+            });
+          }
+        }}
+        onTouchEnd={(e) => {
+          e.preventDefault();
+          if (isPanning) setIsPanning(false);
+          if (isDrawingRoi && roiStart) {
+            setIsDrawingRoi(false);
+            if (roiBox && Math.abs(roiBox.xmax - roiBox.xmin) > 20 && Math.abs(roiBox.ymax - roiBox.ymin) > 20) {
+              onRoiChange?.(roiBox);
+              soundFx.playScanPing();
+            }
+            setRoiStart(null);
+          }
+          if (isDrawingMask && maskStart) {
+            setIsDrawingMask(false);
+            if (roiBox) {
+              // compute roughly from current roiBox not stored; skip complex touch for masks
+            }
+            setMaskStart(null);
+          }
+        }}
       >
         {/* Radiological Crosshair Guidelines Background */}
         <div className="absolute inset-0 pointer-events-none opacity-10 bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:24px_24px]" />
@@ -685,7 +738,7 @@ export const MedicalViewer: React.FC<MedicalViewerProps> = ({
                 <Trash2 className="w-3 h-3" /> Reset PHI Masks
               </button>
             )}
-            <span className="text-slate-500 text-[10px]">Mouse Wheel: Zoom</span>
+            <span className="text-slate-500 text-[10px]">Mouse Wheel / Touch: Zoom/Pan</span>
           </div>
         </div>
       </div>
